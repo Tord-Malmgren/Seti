@@ -9,8 +9,8 @@ namespace Seti
     internal class Seti
     {
         //private const String fileDirectory = @"G:\Seti\";
-        //private const String fileDirectory = @"C:\Users\tordm\Documents\Visual Studio 2022\Projects\Seti\";
-        private const String fileDirectory = @"C:\Users\tomal12\Visual Studio 2022\Projects\Seti\";
+        private const String fileDirectory = @"C:\Users\tordm\Documents\Visual Studio 2022\Projects\Seti\";
+        //private const String fileDirectory = @"C:\Users\tomal12\Visual Studio 2022\Projects\Seti\";
 
         internal static void Main()
         {
@@ -112,8 +112,8 @@ namespace Seti
 
                 if (Screen.AllScreens.Length > 1)
                 {
-                    //form.Location = new Point(-form.Width, 0);
-                    form.Location = new Point(-form.Width, 273);
+                    form.Location = new Point(-form.Width, 0);
+                    //form.Location = new Point(-form.Width, 273);
                     //form.Location = new Point(0, -form.Height - 273 * 2);
                 }
                 else
@@ -122,6 +122,9 @@ namespace Seti
                 }
 
                 form.Show();
+
+                String[] filenames = Directory.GetFiles(fileDirectory + @"train", "*.npy", SearchOption.AllDirectories).ToArray();
+
                 Random random = new((Int32)(DateTime.Now.Ticks % Int32.MaxValue));
                 String filename;
 
