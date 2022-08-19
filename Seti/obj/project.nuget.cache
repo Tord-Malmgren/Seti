@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "dgSpecHash": "o/pg/Q6hF8oRaZNXtlGM3CA4GlyYWjsdEaS03CvwOhXnTKkVkzrsq0DeRLaLyWa/aT9XoZm/XGCZ2kMw2XQOrg==",
+  "dgSpecHash": "VWuXlGIircZWs/NJWjn0TRJH1Ge0Gby2PbIrK6vgb0C+AavsvWc15IF0rIsG3t/To12qhkDdN3wt3uLlyi5yqg==",
   "success": true,
   "projectFilePath": "C:\\Users\\tordm\\Documents\\Visual Studio 2022\\Projects\\Seti\\Seti\\Seti.csproj",
   "expectedPackageFiles": [
@@ -9,7 +9,7 @@
     "C:\\Users\\tordm\\.nuget\\packages\\python.deployment\\1.2.0\\python.deployment.1.2.0.nupkg.sha512",
     "C:\\Users\\tordm\\.nuget\\packages\\python.included\\3.7.3.13\\python.included.3.7.3.13.nupkg.sha512",
     "C:\\Users\\tordm\\.nuget\\packages\\pythonnet_netstandard_py37_win\\2.5.1\\pythonnet_netstandard_py37_win.2.5.1.nupkg.sha512",
-    "C:\\Users\\tordm\\.nuget\\packages\\microsoft.windows.sdk.net.ref\\10.0.17763.26\\microsoft.windows.sdk.net.ref.10.0.17763.26.nupkg.sha512"
+    "C:\\Users\\tordm\\.nuget\\packages\\microsoft.windows.sdk.net.ref\\10.0.22621.26\\microsoft.windows.sdk.net.ref.10.0.22621.26.nupkg.sha512"
   ],
   "logs": []
 }

@@ -1,16 +1,15 @@
 ﻿using System.Diagnostics;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
-using System.Linq;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement.TaskbarClock;
 
 namespace Seti
 {
     internal class Seti
     {
         //private const String fileDirectory = @"G:\Seti\";
-        private const String fileDirectory = @"C:\Users\tordm\Documents\Visual Studio 2022\Projects\Seti\";
-        //private const String fileDirectory = @"C:\Users\tomal12\Visual Studio 2022\Projects\Seti\";
+        //private const String fileDirectory = @"C:\Users\tordm\Documents\Visual Studio 2022\Projects\Seti\";
+        private const String fileDirectory = @"C:\Users\tomal12\Visual Studio 2022\Projects\Seti\";
+        private const Int32 gridSize = 32;
 
         internal static void Main()
         {
@@ -23,7 +22,10 @@ namespace Seti
         {
             private readonly Boolean isTrain;
             private Double[,,] inputData;
-            private Dictionary<Boolean, Double[,]> resonanceData;
+            private Dictionary<Boolean, Double>[,] resonanceData;
+            private Fit fit;
+            private HashSet<(Int32 timeOffset, Int32 frequencyOffset)> offsets;
+
             private Int32 workersLock;
 
             internal DataSet(Boolean isTrain)
@@ -99,10 +101,88 @@ namespace Seti
                 {
                     for (Int32 frequencyOffset = 0; frequencyOffset < 256; frequencyOffset++)
                     {
-                        resonanceData[true][timeOffset, frequencyOffset] = resonanceTrue[timeOffset, frequencyOffset];
-                        resonanceData[false][timeOffset, frequencyOffset] = resonanceFalse[timeOffset, frequencyOffset];
+                        resonanceData[timeOffset, frequencyOffset].Add(true, resonanceTrue[timeOffset, frequencyOffset]);
+                        resonanceData[timeOffset, frequencyOffset].Add(false, resonanceFalse[timeOffset, frequencyOffset]);
                     }
                 }
+                Interlocked.Exchange(ref workersLock, 0);
+            }
+            private void WorkerFit(Object parameters)
+            {
+                Int32 workerIndex = (Int32)((Object[])parameters)[0];
+                Int32 frameNoise = (Int32)((Object[])parameters)[1];
+                Fit fitLocal = new(fit.numberVariables, fit.degree, fit.useConstant);
+                HashSet<(Int32 timeOffset, Int32 frequencyOffset)> offsetsLocal = new();
+                List<Double> features = new();
+                Boolean offsetsSet = false;
+
+                for (Int32 time = workerIndex; time < 273; time += Environment.ProcessorCount)
+                {
+                    for (Int32 frequency = 0; frequency < 256; frequency++)
+                    {
+                        features.Clear();
+
+                        if (!offsetsSet)
+                        {
+                            offsetsLocal.Clear();
+                        }
+
+                        for (Int32 timeOffset = -gridSize; timeOffset <= gridSize; timeOffset++)
+                        {
+                            if (timeOffset.Equals(0))
+                            {
+                                continue;
+                            }
+
+                            Int32 time2 = time + timeOffset;
+
+                            if ((time2 >= 0) && (time2 < 273))
+                            {
+                                features.Add(inputData[frameNoise, time2, frequency]);
+
+                                if (!offsetsSet)
+                                {
+                                    offsetsLocal.Add((timeOffset, 0));
+                                }
+                            }
+                        }
+
+                        for (Int32 frequencyOffset = -gridSize; frequencyOffset <= gridSize; frequencyOffset++)
+                        {
+                            if (frequencyOffset.Equals(0))
+                            {
+                                continue;
+                            }
+
+                            Int32 frequency2 = frequency + frequencyOffset;
+
+                            if ((frequency2 >= 0) && (frequency2 < 256))
+                            {
+                                features.Add(inputData[frameNoise, time, frequency2]);
+
+                                if (!offsetsSet)
+                                {
+                                    offsetsLocal.Add((0, frequencyOffset));
+                                }
+                            }
+                        }
+
+                        if (features.Count.Equals(fit.numberVariables))
+                        {
+                            fitLocal.Add(features.ToArray(), inputData[frameNoise, time, frequency]);
+                            offsetsSet = true;
+                        }
+                    }
+                }
+
+                do { Thread.Sleep(1); } while (Interlocked.CompareExchange(ref workersLock, 1, 0) == 1);
+                fit.Add(fitLocal);
+
+                if (offsets.Count.Equals(0))
+                {
+                    offsets = offsetsLocal.ToHashSet();
+                }
+
                 Interlocked.Exchange(ref workersLock, 0);
             }
 
@@ -112,7 +192,7 @@ namespace Seti
 
                 if (Screen.AllScreens.Length > 1)
                 {
-                    form.Location = new Point(-form.Width, 0);
+                    form.Location = new Point(-form.Width, 273);
                     //form.Location = new Point(-form.Width, 273);
                     //form.Location = new Point(0, -form.Height - 273 * 2);
                 }
@@ -134,8 +214,8 @@ namespace Seti
                 }
                 while (!File.Exists(fileDirectory + @"train\" + filename[..1] + @"\" + filename + ".npy"));
 
-                //filename = "9543918d5a7f353"; // debug clear
-                //filename = "38e4f9f9620b680"; // super clear
+                filename = "9543918d5a7f353"; // debug clear
+                                              //filename = "38e4f9f9620b680"; // super clear
 
                 if (!File.Exists(fileDirectory + @"train\" + filename[..1] + @"\" + filename + ".npy"))
                 {
@@ -238,42 +318,28 @@ namespace Seti
 
                 foreach (Int32 frameNoise in new Int32[] { 1, 3, 5 })
                 {
-                    Fit fit = new((15 * 2 + 1) * (15 * 2 + 1) - 1, 1, true);
-                    HashSet<(Int32 time, Int32 frequency)> offsets = new();
+                    //fit = new((gridSize * 2 + 1) * (gridSize * 2 + 1) - 1, 1, true);
+                    fit = new(4 * gridSize, 1, false);
+                    offsets = new();
 
-                    for (Int32 time = 0; time < 273; time++)
+
+                    Thread[] workers = new Thread[Environment.ProcessorCount];
+                    workersLock = 1;
+
+                    for (Int32 workerIndex = 0; workerIndex < Environment.ProcessorCount; workerIndex++)
                     {
-                        for (Int32 frequency = 0; frequency < 256; frequency++)
-                        {
-                            List<Double> features = new();
-
-                            for (Int32 timeOffset = -15; timeOffset <= 15; timeOffset++)
-                            {
-                                Int32 time2 = time + timeOffset;
-
-                                if ((time2 >= 0) && (time2 < 273))
-                                {
-                                    for (Int32 frequencyOffset = -15; frequencyOffset <= 15; frequencyOffset++)
-                                    {
-                                        if (!(frequencyOffset.Equals(0) && timeOffset.Equals(0)))
-                                        {
-                                            Int32 frequency2 = frequency + frequencyOffset;
-
-                                            if ((frequency2 >= 0) && (frequency2 < 256))
-                                            {
-                                                features.Add(inputData[frameNoise, time2, frequency2]);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (features.Count.Equals(960))
-                            {
-                                fit.Add(features.ToArray(), inputData[frameNoise, time, frequency]);
-                            }
-                        }
+                        workers[workerIndex] = new Thread(WorkerFit) { Priority = ThreadPriority.BelowNormal, IsBackground = true };
+                        workers[workerIndex].Start(new Object[] { workerIndex, frameNoise });
                     }
+
+                    Interlocked.Exchange(ref workersLock, 0);
+
+                    for (Int32 workerIndex = 0; workerIndex < Environment.ProcessorCount; workerIndex++)
+                    {
+                        workers[workerIndex].Join();
+                    }
+
+
 
                     fit.Solve();
 
@@ -281,16 +347,24 @@ namespace Seti
                     {
                         Int32 i = 0;
 
-                        for (Int32 timeOffset = -15; timeOffset <= 15; timeOffset++)
+                        for (Int32 timeOffset = -gridSize; timeOffset <= gridSize; timeOffset++)
                         {
-                            for (Int32 frequencyOffset = -15; frequencyOffset <= 15; frequencyOffset++)
+                            if (timeOffset.Equals(0))
                             {
-                                if (!(frequencyOffset.Equals(0) && timeOffset.Equals(0)))
-                                {
-                                    Debug.WriteLine(timeOffset.ToString() + ";" + frequencyOffset.ToString() + ";" + fit.A[i].ToString());
-                                    i++;
-                                }
+                                continue;
                             }
+
+                            Debug.WriteLine("0;" + timeOffset.ToString() + ";" + fit.A[i++].ToString());
+                        }
+
+                        for (Int32 timeOffset = -gridSize; timeOffset <= gridSize; timeOffset++)
+                        {
+                            if (timeOffset.Equals(0))
+                            {
+                                continue;
+                            }
+
+                            Debug.WriteLine(timeOffset.ToString() + ";0;" + fit.A[i++].ToString());
                         }
                     }
                     else
@@ -310,19 +384,19 @@ namespace Seti
                             {
                                 List<Double> features = new();
 
-                                for (Int32 timeOffset = -15; timeOffset <= 15; timeOffset++)
+                                foreach ((Int32 timeOffset, Int32 frequencyOffset) in offsets)
                                 {
                                     Int32 time2 = time + timeOffset;
 
-                                    if ((time2 >= 0) && (time2 < 273))
+                                    if (time2 >= 0)
                                     {
-                                        for (Int32 frequencyOffset = -15; frequencyOffset <= 15; frequencyOffset++)
+                                        if (time2 < 273)
                                         {
-                                            if (!(frequencyOffset.Equals(0) && timeOffset.Equals(0)))
-                                            {
-                                                Int32 frequency2 = frequency + frequencyOffset;
+                                            Int32 frequency2 = frequency + frequencyOffset;
 
-                                                if ((frequency2 >= 0) && (frequency2 < 256))
+                                            if (frequency2 >= 0)
+                                            {
+                                                if (frequency2 < 256)
                                                 {
                                                     features.Add(inputData[frame, time2, frequency2]);
                                                 }
@@ -331,7 +405,7 @@ namespace Seti
                                     }
                                 }
 
-                                if (features.Count.Equals(960))
+                                if (features.Count.Equals(fit.numberVariables))
                                 {
                                     recreatedMatrix[time, frequency] = inputData[frame, time, frequency] - fit.Outcome(features.ToArray());
                                 }
@@ -362,6 +436,7 @@ namespace Seti
 
                                 if (searchIndex < 0)
                                 {
+                                    throw new Exception("Weird");
                                 }
 
                                 Byte d = (Byte)((Double)searchIndex / recreatedMatrixValues.Count * 255d);
@@ -514,11 +589,16 @@ namespace Seti
 
                 foreach (Int32 frameNoise in new Int32[] { 1, 3, 5 })
                 {
-                    resonanceData = new()
+                    //Tord: resonance init
+                    resonanceData = new Dictionary<Boolean, Double>[273, 256];
+
+                    for (Int32 time = 0; time < 273; time++)
                     {
-                        { true, new Double[273, 256] },
-                        { false, new Double[273, 256] }
-                    };
+                        for (Int32 frequency = 0; frequency < 256; frequency++)
+                        {
+                            resonanceData[time, frequency] = new Dictionary<Boolean, Double>();
+                        }
+                    }
 
 
 
@@ -545,14 +625,14 @@ namespace Seti
                     {
                         for (Int32 frequencyOffset = 0; frequencyOffset < 256; frequencyOffset++)
                         {
-                            if (!Double.IsNaN(resonanceData[true][timeOffset, frequencyOffset]))
+                            if (!Double.IsNaN(resonanceData[timeOffset, frequencyOffset][true]))
                             {
-                                resonances.Add(resonanceData[true][timeOffset, frequencyOffset]);
+                                resonances.Add(resonanceData[timeOffset, frequencyOffset][true]);
                             }
 
-                            if (!Double.IsNaN(resonanceData[false][timeOffset, frequencyOffset]))
+                            if (!Double.IsNaN(resonanceData[timeOffset, frequencyOffset][false]))
                             {
-                                resonances2.Add(resonanceData[false][timeOffset, frequencyOffset]);
+                                resonances2.Add(resonanceData[timeOffset, frequencyOffset][false]);
                             }
                         }
                     }
@@ -573,26 +653,26 @@ namespace Seti
                         {
                             Int32 index = 3 * (timeOffset * 256 + frequencyOffset);
 
-                            Int32 searchIndex = resonances.BinarySearch(resonanceData[true][timeOffset, frequencyOffset]);
+                            Int32 searchIndex = resonances.BinarySearch(resonanceData[timeOffset, frequencyOffset][true]);
                             Byte d1 = (Byte)((Double)searchIndex / resonances.Count * 255d);
 
-                            searchIndex = resonances2.BinarySearch(resonanceData[false][timeOffset, frequencyOffset]);
+                            searchIndex = resonances2.BinarySearch(resonanceData[timeOffset, frequencyOffset][false]);
                             Byte d2 = (Byte)((Double)searchIndex / resonances2.Count * 255d);
 
                             imageData[index] = 0;
-                            imageData[index + 1] = resonanceData[true][timeOffset, frequencyOffset] > resonanceMaximum ? (Byte)0 : d1;
+                            imageData[index + 1] = (resonanceData[timeOffset, frequencyOffset][true] > resonanceMaximum) || (resonanceData[timeOffset, frequencyOffset][false] > resonanceMaximum2) ? (Byte)0 : d1;
                             imageData[index + 2] = d1;
 
-                            imageData2[index] = resonanceData[false][timeOffset, frequencyOffset] > resonanceMaximum2 ? (Byte)(d1 / 2 + d2 / 2) : (Byte)0;
+                            imageData2[index] = resonanceData[timeOffset, frequencyOffset][false] > resonanceMaximum2 ? (Byte)(d1 / 2 + d2 / 2) : (Byte)0;
                             imageData2[index + 1] = d2;
                             imageData2[index + 2] = d1;
 
-                            if (resonanceData[true][timeOffset, frequencyOffset] > resonanceMaximum)
+                            if (resonanceData[timeOffset, frequencyOffset][true] > resonanceMaximum)
                             {
                                 offsets.Add((timeOffset, frequencyOffset));
                             }
 
-                            if (resonanceData[false][timeOffset, frequencyOffset] > resonanceMaximum2)
+                            if (resonanceData[timeOffset, frequencyOffset][false] > resonanceMaximum2)
                             {
                                 offsets.Add((timeOffset, frequencyOffset));
                             }
@@ -639,21 +719,22 @@ namespace Seti
                     foreach (Int32 frame in new Int32[] { 0, 1, 2, 3, 4, 5 })
                     {
                         Double[,] recreatedMatrix = new Double[273, 256];
+                        Int32[,] recreatedMatrixCount = new Int32[273, 256];
 
                         for (Int32 time = 0; time < 273; time++)
                         {
                             for (Int32 frequency = 0; frequency < 256; frequency++)
                             {
                                 Double x = 0;
-                                Double n = 0;
+                                Int32 n = 0;
 
-                                foreach (var offset in offsets)
+                                foreach ((Int32 timeOffset, Int32 frequencyOffset) in offsets)
                                 {
-                                    Int32 frequency2 = frequency + offset.frequency;
+                                    Int32 frequency2 = frequency + frequencyOffset;
 
                                     if (frequency2 < 256)
                                     {
-                                        Int32 time2 = time + offset.time;
+                                        Int32 time2 = time + timeOffset;
 
                                         if (time2 < 273)
                                         {
@@ -661,7 +742,7 @@ namespace Seti
                                             n++;
                                         }
 
-                                        time2 = time - offset.time;
+                                        time2 = time - timeOffset;
 
                                         if (time2 >= 0)
                                         {
@@ -675,23 +756,57 @@ namespace Seti
                                 {
                                     if (x > 0)
                                     {
-                                        recreatedMatrix[time, frequency] = inputData[frame, time, frequency] / (x / n);
+                                        foreach ((Int32 timeOffset, Int32 frequencyOffset) in offsets)
+                                        {
+                                            Int32 frequency2 = frequency + frequencyOffset;
+
+                                            if (frequency2 < 256)
+                                            {
+                                                Int32 time2 = time + timeOffset;
+
+                                                if (time2 < 273)
+                                                {
+                                                    recreatedMatrix[time2, frequency2] += inputData[frame, time2, frequency2] / (x / n);
+                                                    recreatedMatrixCount[time2, frequency2]++;
+                                                }
+
+                                                time2 = time - timeOffset;
+
+                                                if (time2 >= 0)
+                                                {
+                                                    recreatedMatrix[time2, frequency2] += inputData[frame, time2, frequency2] / (x / n);
+                                                    recreatedMatrixCount[time2, frequency2]++;
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
 
                         List<Double> recreatedMatrixValues = new();
+                        List<Int32> recreatedMatrixCountValues = new();
 
                         for (Int32 time = 0; time < 273; time++)
                         {
                             for (Int32 frequency = 0; frequency < 256; frequency++)
                             {
+                                if (recreatedMatrixCount[time, frequency] > 8)
+                                {
+                                    recreatedMatrix[time, frequency] /= recreatedMatrixCount[time, frequency];
+                                }
+                                else
+                                {
+                                    recreatedMatrix[time, frequency] = inputData[frame, time, frequency];
+                                }
+
                                 recreatedMatrixValues.Add(recreatedMatrix[time, frequency]);
+                                recreatedMatrixCountValues.Add(recreatedMatrixCount[time, frequency]);
                             }
                         }
 
                         recreatedMatrixValues.Sort();
+                        recreatedMatrixCountValues.Sort();
 
                         // DRAW
                         Bitmap bitmapMean = new(256, 273, PixelFormat.Format24bppRgb);
@@ -700,26 +815,40 @@ namespace Seti
                         {
                             for (Int32 frequency = 0; frequency < 256; frequency++)
                             {
-                                Double mean = recreatedMatrix[time, frequency];
-                                Int32 searchIndex = recreatedMatrixValues.BinarySearch(mean);
-
-                                if (searchIndex < 0)
+                                if (recreatedMatrixCount[time, frequency] > 0)
                                 {
-                                }
+                                    Int32 searchIndex = recreatedMatrixValues.BinarySearch(recreatedMatrix[time, frequency]);
 
-                                Byte d = (Byte)((Double)searchIndex / recreatedMatrixValues.Count * 255d);
-                                bitmapMean.SetPixel(frequency, time, Color.FromArgb(255, d, d, d));
-                                inputData[frame, time, frequency] = recreatedMatrix[time, frequency];
+                                    if (searchIndex < 0)
+                                    {
+                                        throw new Exception("Ouch!");
+                                    }
+
+                                    Byte d = (Byte)((Double)searchIndex / recreatedMatrixValues.Count * 255d);
+                                    bitmapMean.SetPixel(frequency, time, Color.FromArgb(255, d, d, d));
+
+                                    if (time.Equals(136) && frequency.Equals(128))
+                                    {
+                                    }
+
+                                    inputData[frame, time, frequency] = recreatedMatrix[time, frequency];
+                                }
                             }
                         }
 
                         switch (frame)
                         {
-                            case 0: form.pictureBox0.Image = bitmapMean; form.pictureBox0.Update(); break;
+                            case 0:
+                                form.pictureBox0.Image = bitmapMean; form.pictureBox0.Update();
+                                break;
                             case 1: form.pictureBox1.Image = bitmapMean; form.pictureBox1.Update(); break;
-                            case 2: form.pictureBox2.Image = bitmapMean; form.pictureBox2.Update(); break;
+                            case 2:
+                                form.pictureBox2.Image = bitmapMean; form.pictureBox2.Update();
+                                break;
                             case 3: form.pictureBox3.Image = bitmapMean; form.pictureBox3.Update(); break;
-                            case 4: form.pictureBox4.Image = bitmapMean; form.pictureBox4.Update(); break;
+                            case 4:
+                                form.pictureBox4.Image = bitmapMean; form.pictureBox4.Update();
+                                break;
                             case 5: form.pictureBox5.Image = bitmapMean; form.pictureBox5.Update(); break;
                             default: break;
                         }
@@ -808,10 +937,11 @@ namespace Seti
             private readonly Double[] means;
             private readonly Double[] xTmp;
             private readonly Double[,] dispersionMatrix;
-            private readonly Byte degree;
-            private readonly Boolean useConstant;
             private Double weight;
-            private readonly Int32 numberVariables;
+
+            internal readonly Int32 numberVariables;
+            internal readonly Byte degree;
+            internal readonly Boolean useConstant;
 
             internal Double[] A { get; set; }
             internal Boolean SolutionExists { get; private set; }
@@ -1147,6 +1277,21 @@ namespace Seti
                 }
 
                 return x;
+            }
+
+            internal void Add(Fit fit)
+            {
+                weight += fit.weight;
+
+                for (Int32 i = 0; i < matrixSize; i++)
+                {
+                    means[i] += fit.means[i];
+
+                    for (Int32 j = i; j < matrixSize; j++)
+                    {
+                        dispersionMatrix[i, j] += fit.dispersionMatrix[i, j];
+                    }
+                }
             }
         }
 
