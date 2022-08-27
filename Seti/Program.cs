@@ -25,7 +25,6 @@ namespace Seti
             private Double[,,] inputData;
             private Fit fit;
             private HashSet<(Int32 timeOffset, Int32 frequencyOffset)> offsets;
-
             private Int32 workersLock;
 
             internal DataSet(Boolean isTrain)
